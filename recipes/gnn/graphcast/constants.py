@@ -69,3 +69,5 @@ class Constants(BaseModel):
     icospheres_path: str = os.path.join(
         Path(__file__).parent.resolve(), "icospheres.json"
     )
+    partition_size: int = 1
+

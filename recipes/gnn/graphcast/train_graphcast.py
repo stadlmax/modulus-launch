@@ -35,7 +35,7 @@ from modulus.launch.logging import (
 )
 from modulus.launch.utils import load_checkpoint, save_checkpoint
 
-from train_utils import count_trainable_params
+from train_utils import count_trainable_params, custom_allreduce_fut, create_process_groups
 from loss.utils import grid_cell_area
 from train_base import BaseTrainer
 from validation import Validation
@@ -86,6 +86,10 @@ class GraphCastTrainer(BaseTrainer):
             else:
                 raise ValueError("Invalid dtype for C.amp")
 
+        partition_groups = None
+        if C.partition_size > 1:
+            partition_groups = create_process_groups(C.partition_size)
+
         # instantiate the model
         self.model = GraphCastNet(
             meshgraph_path=C.icospheres_path,
@@ -101,6 +105,8 @@ class GraphCastTrainer(BaseTrainer):
             use_cugraphops_processor=C.cugraphops_processor,
             use_cugraphops_decoder=C.cugraphops_decoder,
             recompute_activation=C.recompute_activation,
+            partition_size=C.partition_size,
+            partition_groups=partition_groups,
         )
 
         # set gradient checkpointing
@@ -133,6 +139,29 @@ class GraphCastTrainer(BaseTrainer):
                 gradient_as_bucket_view=True,
                 static_graph=True,
             )
+            if C.partition_size > 1:
+                self.model = DistributedDataParallel(
+                    self.model,
+                    broadcast_buffers=dist.broadcast_buffers,
+                    find_unused_parameters=dist.find_unused_parameters,
+                    gradient_as_bucket_view=True,
+                    static_graph=True,
+                )
+                num_partitions = dist.world_size // C.partition_size
+                custom_hook = lambda process_group, bucket: custom_allreduce_fut(process_group, bucket.buffer(), divisor=num_partitions)
+                self.model.register_comm_hook(None, custom_hook) 
+
+            else:
+                self.model = DistributedDataParallel(
+                    self.model,
+                    device_ids=[dist.local_rank],
+                    output_device=dist.device,
+                    broadcast_buffers=dist.broadcast_buffers,
+                    find_unused_parameters=dist.find_unused_parameters,
+                    gradient_as_bucket_view=True,
+                    static_graph=True,
+                )
+
         rank_zero_logger.info(
             f"Model parameter count is {count_trainable_params(self.model)}"
         )
