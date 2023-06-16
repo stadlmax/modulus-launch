@@ -13,8 +13,6 @@
 # limitations under the License.
 
 import torch
-import torch.distributed as dist
-from typing import Optional, List
 
 
 def count_trainable_params(model: torch.nn.Module) -> int:
@@ -27,36 +25,3 @@ def count_trainable_params(model: torch.nn.Module) -> int:
         int: Number of trainable parameters.
     """
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-
-def create_process_groups(partition_size: int) -> List[dist.ProcessGroup]:
-    world_size = dist.get_world_size()
-    assert world_size > 1, "distributed training not initialized"
-    assert world_size > partition_size, "world_size must be larger than requested number of partitions"
-    assert world_size % partition_size == 0, "partition_size must divide world_size evenly"
-
-    num_partitions = world_size // partition_size
-    partition_groups = [None] * num_partitions
-
-    for p in range(num_partitions):
-        tmp = list(range(p * partition_size, (p + 1) * partition_size))
-        partition_groups[p] = dist.new_group(
-            ranks=tmp, backend='nccl'
-        )
-
-    return partition_groups
-
-
-def custom_allreduce_fut(
-        process_group: dist.ProcessGroup, 
-        tensor: torch.Tensor, 
-        divisor: Optional[int] = None
-) -> torch.futures.Future[torch.Tensor]:
-    group_to_use = process_group if process_group is not None else dist.group.WORLD
-    if divisor is not None:
-        tensor.div_(divisor)
-    return (
-        dist.all_reduce(tensor, group=group_to_use, async_op=True, op=dist.ReduceOp.SUM)
-        .get_future()
-        .then(lambda fut: fut.value()[0])
-    )

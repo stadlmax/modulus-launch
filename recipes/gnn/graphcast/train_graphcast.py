@@ -28,6 +28,7 @@ import os
 
 from modulus.models.graphcast.graph_cast_net import GraphCastNet
 from modulus.utils.graphcast.loss import CellAreaWeightedLossFunction
+from modulus.utils import custom_allreduce_fut, create_process_groups
 from modulus.launch.logging import (
     PythonLogger,
     initialize_wandb,
@@ -35,7 +36,7 @@ from modulus.launch.logging import (
 )
 from modulus.launch.utils import load_checkpoint, save_checkpoint
 
-from train_utils import count_trainable_params, custom_allreduce_fut, create_process_groups
+from train_utils import count_trainable_params
 from loss.utils import grid_cell_area
 from train_base import BaseTrainer
 from validation import Validation
@@ -130,15 +131,6 @@ class GraphCastTrainer(BaseTrainer):
 
         # distributed data parallel for multi-node training
         if dist.world_size > 1:
-            self.model = DistributedDataParallel(
-                self.model,
-                device_ids=[dist.local_rank],
-                output_device=dist.device,
-                broadcast_buffers=dist.broadcast_buffers,
-                find_unused_parameters=dist.find_unused_parameters,
-                gradient_as_bucket_view=True,
-                static_graph=True,
-            )
             if C.partition_size > 1:
                 self.model = DistributedDataParallel(
                     self.model,
