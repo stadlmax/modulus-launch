@@ -26,7 +26,8 @@ share/python-wheels/
 MANIFEST
 
 # vortex_shedding datasets
-/recipes/gnn/vortex_shedding/raw_dataset/*
-!/recipes/gnn/vortex_shedding/raw_dataset/download_dataset.sh
+/examples/cfg/vortex_shedding/raw_dataset/*
+!/examples/cfg/vortex_shedding/raw_dataset/download_dataset.sh
 
 # GraphCast datasets (symlink)
+/examples/weather/graphcast/datasets/ngc_era5_data

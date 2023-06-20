@@ -38,8 +38,8 @@ class Validation:
             num_samples_per_year=C.num_val_spy,
             shuffle=False,
             device=self.dist.device,
-            process_rank=self.dist.rank,
-            world_size=self.dist.world_size,
+            process_rank=self.dist.rank // C.partition_size,
+            world_size=self.dist.world_size // C.partition_size,
             num_workers=C.num_workers,
         )
         print(f"Loaded validation datapipe of size {len(self.val_datapipe)}")
@@ -55,26 +55,31 @@ class Validation:
                 data[0]["outvar"][0].to(dtype=self.dtype).to(device=self.dist.device)
             )
 
-            pred = (
-                torch.empty(outvar.shape)
-                .to(dtype=self.dtype)
-                .to(device=self.dist.device)
-            )
+            if self.dist.rank == 0:
+                pred = (
+                    torch.empty(outvar.shape)
+                    .to(dtype=self.dtype)
+                    .to(device=self.dist.device)
+                )
             for t in range(outvar.shape[0]):
+                # all ranks have to take part in forward pass
                 outpred = self.model(invar)
-                pred[t] = outpred
-                invar = outpred
+                # only rank 0 has to do actual handling of output
+                if self.dist.rank == 0:
+                    pred[t] = outpred
+                    invar = outpred
 
-            loss_epoch += torch.mean(torch.pow(pred - outvar, 2))
-            torch.cuda.nvtx.range_pop()
+            if self.dist.rank == 0:
+                loss_epoch += torch.mean(torch.pow(pred - outvar, 2))
+                torch.cuda.nvtx.range_pop()
 
-            pred = pred.to(torch.float32).cpu().numpy()
-            outvar = outvar.to(torch.float32).cpu().numpy()
+                pred = pred.to(torch.float32).cpu().numpy()
+                outvar = outvar.to(torch.float32).cpu().numpy()
 
             del invar, outpred
             torch.cuda.empty_cache()
 
-            if i == 0:
+            if i == 0 and self.dist.rank == 0:
                 for chan in channels:
                     plt.close("all")
                     fig, ax = plt.subplots(3, pred.shape[0], figsize=(15, 5))

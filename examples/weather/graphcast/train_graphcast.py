@@ -28,7 +28,7 @@ import os
 
 from modulus.models.graphcast.graph_cast_net import GraphCastNet
 from modulus.utils.graphcast.loss import CellAreaWeightedLossFunction
-from modulus.utils import custom_allreduce_fut, create_process_groups
+from modulus.distributed import custom_allreduce_fut, create_process_groups
 from modulus.launch.logging import (
     PythonLogger,
     initialize_wandb,
@@ -65,8 +65,7 @@ if C.cugraphops_encoder or C.cugraphops_processor or C.cugraphops_decoder:
 
 class GraphCastTrainer(BaseTrainer):
     def __init__(self, wb, dist, rank_zero_logger):
-        super().__init__()
-        self.dist = dist
+        super().__init__(dist=dist)
         self.dtype = torch.bfloat16 if C.full_bf16 else torch.float32
         self.enable_scaler = False
         self.amp_dtype = None
@@ -133,7 +132,10 @@ class GraphCastTrainer(BaseTrainer):
         if dist.world_size > 1:
             if C.partition_size > 1:
                 self.model = DistributedDataParallel(
-                    self.model,
+                    self.model.to(dist.local_rank),
+                    device_ids=None, # must be none
+                    output_device=None, # must be none
+                    process_group=partition_groups[dist.local_rank // C.partition_size],
                     broadcast_buffers=dist.broadcast_buffers,
                     find_unused_parameters=dist.find_unused_parameters,
                     gradient_as_bucket_view=True,
@@ -141,7 +143,7 @@ class GraphCastTrainer(BaseTrainer):
                 )
                 num_partitions = dist.world_size // C.partition_size
                 custom_hook = lambda process_group, bucket: custom_allreduce_fut(process_group, bucket.buffer(), divisor=num_partitions)
-                self.model.register_comm_hook(None, custom_hook) 
+                self.model.register_comm_hook(partition_groups[dist.local_rank // C.partition_size], custom_hook) 
 
             else:
                 self.model = DistributedDataParallel(
@@ -167,15 +169,15 @@ class GraphCastTrainer(BaseTrainer):
             batch_size=1,
             num_workers=C.num_workers,
             device=dist.device,
-            process_rank=dist.rank,
-            world_size=dist.world_size,
+            process_rank=dist.rank // C.partition_size,
+            world_size=dist.world_size // C.partition_size,
         )
         rank_zero_logger.success(
             f"Loaded training datapipe of size {len(self.datapipe)}"
         )
 
-        # instantiate the validation
-        if dist.rank == 0:
+        # instantiate the validation 
+        if dist.rank // C.partition_size == 0:
             self.validation = Validation(self.model, self.dtype, self.dist, wb)
 
         # enable train mode
@@ -221,6 +223,7 @@ class GraphCastTrainer(BaseTrainer):
         # load checkpoint
         if dist.world_size > 1:
             torch.distributed.barrier()
+
         self.iter_init = load_checkpoint(
             os.path.join(C.ckpt_path, C.ckpt_name),
             models=self.model,
@@ -322,8 +325,8 @@ if __name__ == "__main__":
                         batch_size=1,
                         num_workers=C.num_workers,
                         device=dist.device,
-                        process_rank=dist.rank,
-                        world_size=dist.world_size,
+                        process_rank=dist.rank // C.partition_size,
+                        world_size=dist.world_size // C.partition_size,
                     )
                     update_dataloader = False
                     rank_zero_logger.info(
@@ -339,21 +342,23 @@ if __name__ == "__main__":
                 data_x = data_x.to(dtype=trainer.dtype)
                 grid_nfeat = data_x
                 y = data_y.to(dtype=trainer.dtype).to(device=dist.device)
-
                 # training step
                 loss = trainer.train(grid_nfeat, y)
-                if dist.rank == 0:
-                    loss_agg += loss.detach().cpu()
+                loss_agg += loss.detach().cpu()
 
                 # validation
-                if dist.rank == 0 and iter % C.val_freq == 0:
+                if iter % C.val_freq == 0:
                     # free up GPU memory
                     del data_x, y
                     torch.cuda.empty_cache()
-                    error = trainer.validation.step(
-                        channels=list(np.arange(C.num_channels_val)), iter=iter
-                    )
-                    logger.log(f"iteration {iter}, Validation MSE: {error:.04f}")
+
+                    if dist.rank // C.partition_size == 0:
+                        error = trainer.validation.step(
+                            channels=list(np.arange(C.num_channels_val)), iter=iter
+                        )
+
+                    if dist.rank == 0:
+                        logger.log(f"iteration {iter}, Validation MSE: {error:.04f}")
 
                 # distributed barrier
                 if dist.world_size > 1:
@@ -389,12 +394,15 @@ if __name__ == "__main__":
 
                 # wrap up & terminate if training is finished
                 if iter >= C.num_iters_step1 + C.num_iters_step2 + C.num_iters_step3:
-                    if dist.rank == 0:
-                        del data_x, y
-                        torch.cuda.empty_cache()
+                    del data_x, y
+                    torch.cuda.empty_cache()
+                   
+                    if dist.rank // C.partition_size == 0:
                         error = trainer.validation.step(
                             channels=list(np.arange(C.num_channels_val)), iter=iter
                         )
+
+                    if dist.rank == 0:
                         logger.log(f"iteration {iter}, Validation MSE: {error:.04f}")
                         save_checkpoint(
                             os.path.join(C.ckpt_path, C.ckpt_name),

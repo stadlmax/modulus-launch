@@ -132,7 +132,7 @@ def _unique_model_names(
             model0 = model0.module
         # Base name of model is meta.name unless pytorch model
         base_name = model0.__class__.__name__
-        if isinstance(model0, modulus.Module):
+        if isinstance(model0, modulus.models.Module):
             base_name = model0.meta.name
         # If we have multiple models of the same name, introduce another index
         if base_name in model_dict:
@@ -199,7 +199,7 @@ def save_checkpoint(
             # Get full file path / name
             file_name = _get_checkpoint_filename(path, name, index=epoch, saving=True)
             # Save state dictionary
-            if isinstance(model, modulus.Module):
+            if isinstance(model, modulus.models.Module):
                 model.save(file_name)
             else:
                 torch.save(model.state_dict(), file_name)
@@ -297,7 +297,7 @@ def load_checkpoint(
                 )
                 continue
             # Load state dictionary
-            if isinstance(model, modulus.Module):
+            if isinstance(model, modulus.models.Module):
                 model.load(file_name)
             else:
                 model.load_state_dict(torch.load(file_name, map_location=device))

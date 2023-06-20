@@ -19,14 +19,15 @@ from torch.cuda.amp import autocast
 # import modules
 import sys
 
+
 from constants import Constants
 
 C = Constants()
 
 
 class BaseTrainer:
-    def __init__(self):
-        pass
+    def __init__(self, dist):
+        self.dist = dist
 
     def rollout(self, grid_nfeat, y):
         with autocast(enabled=C.amp, dtype=self.amp_dtype):
@@ -36,6 +37,13 @@ class BaseTrainer:
                 # Shape of y is [N, M, C, H, W]. M is the number of steps
                 pred = self.model(pred_prev)
                 loss = self.criterion(pred, y[:, i])
+                if self.dist.rank % C.partition_size != 0:
+                    # we only need a valid loss on one subrank of graph partition
+                    # TODO eventually improve, we ned pred_prev on all ranks
+                    # but we could eventually introduce a broadcasting logic
+                    # which would get rid of unnecessary exchanges of gradient with value 0
+                    loss = loss * 0
+
                 total_loss += loss
                 pred_prev = pred
             return total_loss
