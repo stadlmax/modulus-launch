@@ -132,23 +132,24 @@ class GraphCastTrainer(BaseTrainer):
         if dist.world_size > 1:
             if C.partition_size > 1:
                 self.model = DistributedDataParallel(
-                    self.model.to(dist.local_rank),
+                    self.model.to(dist.device),
                     device_ids=None, # must be none
                     output_device=None, # must be none
-                    process_group=partition_groups[dist.local_rank // C.partition_size],
+                    process_group=dist.group("graph_partition"),
                     broadcast_buffers=dist.broadcast_buffers,
                     find_unused_parameters=dist.find_unused_parameters,
                     gradient_as_bucket_view=True,
                     static_graph=True,
                 )
-                num_partitions = dist.world_size // C.partition_size
-                custom_hook = lambda process_group, bucket: custom_allreduce_fut(process_group, bucket.buffer(), divisor=num_partitions)
-                self.model.register_comm_hook(partition_groups[dist.local_rank // C.partition_size], custom_hook) 
+                num_partitions = dist.num_groups("graph_partition")
+                # if ones uses local loss (default), then dedicated allreduce_hook is not needed
+                # custom_hook = lambda process_group, bucket: custom_allreduce_fut(process_group, bucket.buffer(), divisor=num_partitions)
+                # self.model.register_comm_hook(dist.group("graph_partition"), custom_hook) 
 
             else:
                 self.model = DistributedDataParallel(
                     self.model,
-                    device_ids=[dist.local_rank],
+                    device_ids=[dist.device],
                     output_device=dist.device,
                     broadcast_buffers=dist.broadcast_buffers,
                     find_unused_parameters=dist.find_unused_parameters,
@@ -169,15 +170,15 @@ class GraphCastTrainer(BaseTrainer):
             batch_size=1,
             num_workers=C.num_workers,
             device=dist.device,
-            process_rank=dist.rank // C.partition_size,
-            world_size=dist.world_size // C.partition_size,
+            process_rank=dist.group_id("graph_partition"),
+            world_size=dist.num_groups("graph_partition"),
         )
         rank_zero_logger.success(
             f"Loaded training datapipe of size {len(self.datapipe)}"
         )
 
         # instantiate the validation 
-        if dist.rank // C.partition_size == 0:
+        if dist.group_id("graph_partition") == 0:
             self.validation = Validation(self.model, self.dtype, self.dist, wb)
 
         # enable train mode
@@ -191,6 +192,9 @@ class GraphCastTrainer(BaseTrainer):
         else:
             self.area = grid_cell_area(self.model.lat_lon_grid[:, :, 0], unit="deg")
         self.area = self.area.to(dtype=self.dtype).to(device=dist.device)
+        if C.partition_size > 1:
+            self.area = self.area.view(-1)
+            self.area = self.model.module.m2g_graph.get_dst_node_features_in_partition(self.area)
 
         # instantiate loss, optimizer, and scheduler
         self.criterion = CellAreaWeightedLossFunction(self.area)
@@ -237,6 +241,8 @@ class GraphCastTrainer(BaseTrainer):
 if __name__ == "__main__":
     # initialize distributed manager
     DistributedManager.initialize()
+    DistributedManager.create_process_subgroup("graph_partition", C.partition_size)
+
     dist = DistributedManager()
 
     if dist.rank == 0:
@@ -325,8 +331,8 @@ if __name__ == "__main__":
                         batch_size=1,
                         num_workers=C.num_workers,
                         device=dist.device,
-                        process_rank=dist.rank // C.partition_size,
-                        world_size=dist.world_size // C.partition_size,
+                        process_rank=dist.group_id("graph_partition"),
+                        world_size=dist.num_groups("graph_partition"),
                     )
                     update_dataloader = False
                     rank_zero_logger.info(
@@ -352,7 +358,7 @@ if __name__ == "__main__":
                     del data_x, y
                     torch.cuda.empty_cache()
 
-                    if dist.rank // C.partition_size == 0:
+                    if dist.group_id("graph_partition") == 0:
                         error = trainer.validation.step(
                             channels=list(np.arange(C.num_channels_val)), iter=iter
                         )
@@ -397,7 +403,7 @@ if __name__ == "__main__":
                     del data_x, y
                     torch.cuda.empty_cache()
                    
-                    if dist.rank // C.partition_size == 0:
+                    if dist.group_id("graph_partition"):
                         error = trainer.validation.step(
                             channels=list(np.arange(C.num_channels_val)), iter=iter
                         )
