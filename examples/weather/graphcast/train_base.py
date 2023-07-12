@@ -35,6 +35,7 @@ class BaseTrainer:
             pred_prev = grid_nfeat
             for i in range(y.size(dim=1)):
                 # Shape of y is [N, M, C, H, W]. M is the number of steps
+                # (or [N, M, C, P] when partitioned)
                 pred = self.model(pred_prev)
                 loss = self.criterion(pred, y[:, i])
                 total_loss += loss

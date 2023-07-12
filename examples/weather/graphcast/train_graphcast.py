@@ -28,7 +28,7 @@ import os
 
 from modulus.models.graphcast.graph_cast_net import GraphCastNet
 from modulus.utils.graphcast.loss import CellAreaWeightedLossFunction
-from modulus.distributed import custom_allreduce_fut, create_process_groups
+from modulus.distributed import custom_allreduce_fut
 from modulus.launch.logging import (
     PythonLogger,
     initialize_wandb,
@@ -86,10 +86,6 @@ class GraphCastTrainer(BaseTrainer):
             else:
                 raise ValueError("Invalid dtype for C.amp")
 
-        partition_groups = None
-        if C.partition_size > 1:
-            partition_groups = create_process_groups(C.partition_size)
-
         # instantiate the model
         self.model = GraphCastNet(
             meshgraph_path=C.icospheres_path,
@@ -106,7 +102,10 @@ class GraphCastTrainer(BaseTrainer):
             use_cugraphops_decoder=C.cugraphops_decoder,
             recompute_activation=C.recompute_activation,
             partition_size=C.partition_size,
-            partition_groups=partition_groups,
+            partition_group_name="graph_partition",
+            dist_manager=dist,
+            expect_partitioned_input=False,
+            produce_aggregated_output=False,
         )
 
         # set gradient checkpointing
@@ -193,8 +192,9 @@ class GraphCastTrainer(BaseTrainer):
             self.area = grid_cell_area(self.model.lat_lon_grid[:, :, 0], unit="deg")
         self.area = self.area.to(dtype=self.dtype).to(device=dist.device)
         if C.partition_size > 1:
-            self.area = self.area.view(-1)
+            self.area = self.area.view(-1, 1)
             self.area = self.model.module.m2g_graph.get_dst_node_features_in_partition(self.area)
+            self.area = self.area.view(-1)
 
         # instantiate loss, optimizer, and scheduler
         self.criterion = CellAreaWeightedLossFunction(self.area)
@@ -241,7 +241,8 @@ class GraphCastTrainer(BaseTrainer):
 if __name__ == "__main__":
     # initialize distributed manager
     DistributedManager.initialize()
-    DistributedManager.create_process_subgroup("graph_partition", C.partition_size)
+    if C.partition_size > 1:
+        DistributedManager.create_process_subgroup("graph_partition", C.partition_size)
 
     dist = DistributedManager()
 
@@ -348,6 +349,12 @@ if __name__ == "__main__":
                 data_x = data_x.to(dtype=trainer.dtype)
                 grid_nfeat = data_x
                 y = data_y.to(dtype=trainer.dtype).to(device=dist.device)
+                if C.partition_size > 1:
+                    _N, _M, _C, _H, _W = y.shape
+                    y = y.view(_N, _M, _C, _H * _W)
+                    y = y.permute(3, 0, 1, 2)
+                    y = trainer.model.module.m2g_graph.get_dst_node_features_in_partition(y)
+                    y = y.permute(1, 2, 3, 0)
                 # training step
                 loss = trainer.train(grid_nfeat, y)
                 loss_agg += loss.detach().cpu()

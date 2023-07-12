@@ -49,6 +49,13 @@ class Validation:
         torch.cuda.nvtx.range_push("Validation")
         os.makedirs(C.val_dir, exist_ok=True)
         loss_epoch = 0
+        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+            old_flag = self.model.module.get_aggregate_output_flag()
+            self.model.module.set_aggregate_output_flag(True)
+        else:
+            old_flag = self.model.get_aggregate_output_flag()
+            self.model.set_aggregate_output_flag(True)    
+       
         for i, data in enumerate(self.val_datapipe):
             invar = data[0]["invar"].to(dtype=self.dtype)
             outvar = (
@@ -115,4 +122,8 @@ class Validation:
                     )
                     self.wb.log({f"val_chan{chan}_iter{iter}": fig}, step=iter)
 
+        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+            self.model.module.set_aggregated_output_flag(old_flag)
+        else:
+            self.model.set_aggregated_output_flag(old_flag)
         return loss_epoch / len(self.val_datapipe)

@@ -21,7 +21,7 @@ from typing import Tuple, Optional
 class Constants(BaseModel):
     """GraphCast constants"""
 
-    processor_layers: int = 16
+    processor_layers: int = 8
     hidden_dim: int = 512
     segments: int = 1
     force_single_checkpoint: bool = False
@@ -60,8 +60,8 @@ class Constants(BaseModel):
     step_change_freq = 1000
     save_freq: int = 500
     val_freq: int = 1000
-    ckpt_path: str = "tmp/checkpoints_34var_ps8"
-    val_dir: str = "tmp/validation_34var_ps8"
+    ckpt_path: str = "tmp/checkpoints_34var_ps4"
+    val_dir: str = "tmp/validation_34var_ps4"
     ckpt_name: str = "model_34var.pt"
     pyt_profiler: bool = False
     profile: bool = False
@@ -69,4 +69,4 @@ class Constants(BaseModel):
     icospheres_path: str = os.path.join(
         Path(__file__).parent.resolve(), "icospheres.json"
     )
-    partition_size: int = 8
+    partition_size: int = 4
