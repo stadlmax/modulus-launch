@@ -57,11 +57,16 @@ class Validation:
             )
             invar_shape = invar.shape
 
-            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel) and self.model.module.is_distributed:
+            if (
+                isinstance(self.model, torch.nn.parallel.DistributedDataParallel)
+                and self.model.module.is_distributed
+            ):
                 _N, _C, _H, _W = invar.shape
                 invar = invar.view(_N, _C, _H * _W)
                 invar = invar.permute(2, 1, 0).view(_H * _W, -1)
-                invar = self.model.module.g2m_graph.get_src_node_features_in_partition(invar)
+                invar = self.model.module.g2m_graph.get_src_node_features_in_partition(
+                    invar
+                )
                 invar = invar.permute(1, 0).unsqueeze(dim=0)
 
             pred = (
@@ -73,11 +78,16 @@ class Validation:
                 # all ranks have to take part in forward pass
                 outpred = self.model(invar)
                 invar = outpred
-                
-                if isinstance(self.model, torch.nn.parallel.DistributedDataParallel) and self.model.module.is_distributed:
+
+                if (
+                    isinstance(self.model, torch.nn.parallel.DistributedDataParallel)
+                    and self.model.module.is_distributed
+                ):
                     outpred = outpred.permute(2, 0, 1)
                     outpred = outpred.view(outpred.size(0), -1)
-                    outpred = self.model.module.m2g_graph.get_global_dst_node_features(outpred, get_on_all_ranks=False)
+                    outpred = self.model.module.m2g_graph.get_global_dst_node_features(
+                        outpred, get_on_all_ranks=False
+                    )
                     outpred = outpred.permute(1, 0).unsqueeze(dim=0).view(invar_shape)
                     pred[t] = outpred
 

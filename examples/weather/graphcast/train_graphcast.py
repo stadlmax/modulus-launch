@@ -132,8 +132,8 @@ class GraphCastTrainer(BaseTrainer):
             if C.partition_size > 1:
                 self.model = DistributedDataParallel(
                     self.model.to(dist.device),
-                    device_ids=None, # must be none
-                    output_device=None, # must be none
+                    device_ids=None,  # must be none
+                    output_device=None,  # must be none
                     process_group=dist.group("graph_partition"),
                     broadcast_buffers=dist.broadcast_buffers,
                     find_unused_parameters=dist.find_unused_parameters,
@@ -143,7 +143,7 @@ class GraphCastTrainer(BaseTrainer):
                 num_partitions = dist.num_groups("graph_partition")
                 # if ones uses local loss (default), then dedicated allreduce_hook is not needed
                 # custom_hook = lambda process_group, bucket: custom_allreduce_fut(process_group, bucket.buffer(), divisor=num_partitions)
-                # self.model.register_comm_hook(dist.group("graph_partition"), custom_hook) 
+                # self.model.register_comm_hook(dist.group("graph_partition"), custom_hook)
 
             else:
                 self.model = DistributedDataParallel(
@@ -176,7 +176,7 @@ class GraphCastTrainer(BaseTrainer):
             f"Loaded training datapipe of size {len(self.datapipe)}"
         )
 
-        # instantiate the validation 
+        # instantiate the validation
         if dist.group_id("graph_partition") == 0:
             self.validation = Validation(self.model, self.dtype, self.dist, wb)
 
@@ -193,7 +193,9 @@ class GraphCastTrainer(BaseTrainer):
         self.area = self.area.to(dtype=self.dtype).to(device=dist.device)
         if C.partition_size > 1:
             self.area = self.area.view(-1, 1)
-            self.area = self.model.module.m2g_graph.get_dst_node_features_in_partition(self.area)
+            self.area = self.model.module.m2g_graph.get_dst_node_features_in_partition(
+                self.area
+            )
             self.area = self.area.view(-1)
 
         # instantiate loss, optimizer, and scheduler
@@ -354,13 +356,17 @@ if __name__ == "__main__":
                     _N, _C, _H, _W = grid_nfeat.shape
                     grid_nfeat = grid_nfeat.view(_N, _C, _H * _W)
                     grid_nfeat = grid_nfeat.permute(2, 0, 1)
-                    grid_nfeat = trainer.model.module.g2m_graph.get_src_node_features_in_partition(grid_nfeat)
+                    grid_nfeat = trainer.model.module.g2m_graph.get_src_node_features_in_partition(
+                        grid_nfeat
+                    )
                     grid_nfeat = grid_nfeat.permute(1, 2, 0)
                     # distribute targets
                     _N, _M, _C, _H, _W = y.shape
                     y = y.view(_N, _M, _C, _H * _W)
                     y = y.permute(3, 0, 1, 2)
-                    y = trainer.model.module.m2g_graph.get_dst_node_features_in_partition(y)
+                    y = trainer.model.module.m2g_graph.get_dst_node_features_in_partition(
+                        y
+                    )
                     y = y.permute(1, 2, 3, 0)
                 # training step
                 loss = trainer.train(grid_nfeat, y)
@@ -416,7 +422,7 @@ if __name__ == "__main__":
                 if iter >= C.num_iters_step1 + C.num_iters_step2 + C.num_iters_step3:
                     del data_x, y
                     torch.cuda.empty_cache()
-                   
+
                     if dist.group_id("graph_partition"):
                         error = trainer.validation.step(
                             channels=list(np.arange(C.num_channels_val)), iter=iter
