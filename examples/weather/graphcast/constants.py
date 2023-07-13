@@ -22,7 +22,7 @@ class Constants(BaseModel):
     """GraphCast constants"""
 
     processor_layers: int = 8
-    hidden_dim: int = 512
+    hidden_dim: int = 256
     segments: int = 1
     force_single_checkpoint: bool = False
     checkpoint_encoder: bool = True
@@ -54,14 +54,14 @@ class Constants(BaseModel):
     watch_model: bool = False
     lr: float = 1e-3
     lr_step3: float = 3e-7
-    num_iters_step1 = 20 #1000
-    num_iters_step2 = 20 #299000
-    num_iters_step3 = 20 #11000
+    num_iters_step1 = 100 #1000
+    num_iters_step2 = 100 #299000
+    num_iters_step3 = 0 #11000
     step_change_freq = 1000
     save_freq: int = 500
     val_freq: int = 1000
-    ckpt_path: str = "tmp/checkpoints_34var_ps4"
-    val_dir: str = "tmp/validation_34var_ps4"
+    ckpt_path: str = "tmp/checkpoints_34var_1"
+    val_dir: str = "tmp/validation_34var_1"
     ckpt_name: str = "model_34var.pt"
     pyt_profiler: bool = False
     profile: bool = False
@@ -69,4 +69,4 @@ class Constants(BaseModel):
     icospheres_path: str = os.path.join(
         Path(__file__).parent.resolve(), "icospheres.json"
     )
-    partition_size: int = 4
+    partition_size: int = 1

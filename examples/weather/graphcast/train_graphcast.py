@@ -104,7 +104,7 @@ class GraphCastTrainer(BaseTrainer):
             partition_size=C.partition_size,
             partition_group_name="graph_partition",
             dist_manager=dist,
-            expect_partitioned_input=False,
+            expect_partitioned_input=True,
             produce_aggregated_output=False,
         )
 
@@ -350,6 +350,13 @@ if __name__ == "__main__":
                 grid_nfeat = data_x
                 y = data_y.to(dtype=trainer.dtype).to(device=dist.device)
                 if C.partition_size > 1:
+                    # distribute inputs
+                    _N, _C, _H, _W = grid_nfeat.shape
+                    grid_nfeat = grid_nfeat.view(_N, _C, _H * _W)
+                    grid_nfeat = grid_nfeat.permute(2, 0, 1)
+                    grid_nfeat = trainer.model.module.g2m_graph.get_src_node_features_in_partition(grid_nfeat)
+                    grid_nfeat = grid_nfeat.permute(1, 2, 0)
+                    # distribute targets
                     _N, _M, _C, _H, _W = y.shape
                     y = y.view(_N, _M, _C, _H * _W)
                     y = y.permute(3, 0, 1, 2)

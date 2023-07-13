@@ -49,32 +49,40 @@ class Validation:
         torch.cuda.nvtx.range_push("Validation")
         os.makedirs(C.val_dir, exist_ok=True)
         loss_epoch = 0
-        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-            old_flag = self.model.module.get_aggregate_output_flag()
-            self.model.module.set_aggregate_output_flag(True)
-        else:
-            old_flag = self.model.get_aggregate_output_flag()
-            self.model.set_aggregate_output_flag(True)    
-       
+
         for i, data in enumerate(self.val_datapipe):
             invar = data[0]["invar"].to(dtype=self.dtype)
             outvar = (
                 data[0]["outvar"][0].to(dtype=self.dtype).to(device=self.dist.device)
             )
+            invar_shape = invar.shape
 
-            if self.dist.rank == 0:
-                pred = (
-                    torch.empty(outvar.shape)
-                    .to(dtype=self.dtype)
-                    .to(device=self.dist.device)
-                )
+            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel) and self.model.module.is_distributed:
+                _N, _C, _H, _W = invar.shape
+                invar = invar.view(_N, _C, _H * _W)
+                invar = invar.permute(2, 1, 0).view(_H * _W, -1)
+                invar = self.model.module.g2m_graph.get_src_node_features_in_partition(invar)
+                invar = invar.permute(1, 0).unsqueeze(dim=0)
+
+            pred = (
+                torch.empty(outvar.shape)
+                .to(dtype=self.dtype)
+                .to(device=self.dist.device)
+            )
             for t in range(outvar.shape[0]):
                 # all ranks have to take part in forward pass
                 outpred = self.model(invar)
-                # only rank 0 has to do actual handling of output
-                if self.dist.rank == 0:
+                invar = outpred
+                
+                if isinstance(self.model, torch.nn.parallel.DistributedDataParallel) and self.model.module.is_distributed:
+                    outpred = outpred.permute(2, 0, 1)
+                    outpred = outpred.view(outpred.size(0), -1)
+                    outpred = self.model.module.m2g_graph.get_global_dst_node_features(outpred, get_on_all_ranks=False)
+                    outpred = outpred.permute(1, 0).unsqueeze(dim=0).view(invar_shape)
                     pred[t] = outpred
-                    invar = outpred
+
+                else:
+                    pred[t] = outpred
 
             if self.dist.rank == 0:
                 loss_epoch += torch.mean(torch.pow(pred - outvar, 2))
@@ -122,8 +130,4 @@ class Validation:
                     )
                     self.wb.log({f"val_chan{chan}_iter{iter}": fig}, step=iter)
 
-        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-            self.model.module.set_aggregated_output_flag(old_flag)
-        else:
-            self.model.set_aggregated_output_flag(old_flag)
         return loss_epoch / len(self.val_datapipe)
